@@ -9,6 +9,7 @@
       max-width: 900px; margin: auto; padding: 20px; line-height: 1.4; }
     #track-title { margin: 0 0 8px; text-align:center; }
     #timer { font-weight: 600; text-align:center; }
+    #song-picker { display:none; text-align:center; margin: 10px 0; }
     #main-controls { display:none; text-align:center; margin: 12px 0 18px; }
     #play-pause, #stop { padding: 12px 22px; font-size: 1.05rem; border:0; border-radius: 8px; cursor:pointer; margin: 0 6px; }
     #play-pause { background:#16a34a; color:#fff; } #play-pause[disabled]{opacity:.6;cursor:not-allowed}
@@ -43,8 +44,14 @@
   </style>
 </head>
 <body>
-  <h1 id="track-title">A Tribute to the Armed Forces</h1>
+  <h1 id="track-title">Choir Practice Player</h1>
   <div id="timer">Measure --, Beat --</div>
+
+  <!-- Song menu (shown after password) -->
+  <div id="song-picker">
+    <label for="song-select"><strong>Choose a song:</strong></label>
+    <select id="song-select"></select>
+  </div>
 
   <div id="main-controls">
     <button id="play-pause" disabled>Loading…</button>
@@ -74,335 +81,365 @@
   <div id="player"></div>
 
   <script>
-  // Strong password (meets 12+ / upper / lower / number / symbol)
-  const correctPassword = "Sing!Choir2025";
+    // ---------------- AUTH ----------------
+    const correctPassword = "Sing!Choir2025";
+    const pwRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^\w\s]).{12,}$/;
 
-  // Complexity: 12+ chars, at least one lowercase, uppercase, digit, and symbol
-  const pwRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^\w\s]).{12,}$/;
-
-  // ---------- AUDIO FILES (unchanged from your last version) ----------
-  const BASE = 'assets/A Tribute to the Armed Forces/';
-  const p = (name) => encodeURI(BASE + name);
-
-  const tracks = [
-    { name: 'Accompaniment', url: p('A Tribute to the Armed Services accompaniment Track.wav') },
-    { name: 'Soprano',       url: p('SopranoA Tribute to the Armed Forces.wav') },
-    { name: 'Alto',          url: p('AltoA Tribute to the Armed Forces.wav') },
-    { name: 'Tenor',         url: p('TenorA Tribute to the Armed Forces.wav') },
-    { name: 'Bass',          url: p('BassA Tribute to the Armed Forces.wav') }
-  ];
-
-  // ---------- TEMPO / TIMELINE CONFIG ----------
-  // Set this to 4 for 4/4 or 3 for 3/4
-  const beatsPerMeasure = 4;        // change to 3 if the piece is in 3/4
-  const measuresTotal   = 127;
-  const pickupBeats     = 1;        // quarter-note pickup = 1 beat
-
-  // Tempo map: each entry sets the BPM starting at that measure number.
-  // Pickup uses the BPM of measure 1.
-  const tempoMap = [
-    { measure: 1, bpm: 96 },   // pickup + measures 1–7 at 96
-    { measure: 8, bpm: 108 }   // measures 8–127 at 108
-  ];
-
-  function bpmAtMeasure(m) {
-    let bpm = tempoMap[0].bpm;
-    for (let i = 0; i < tempoMap.length; i++) {
-      if (tempoMap[i].measure <= m) bpm = tempoMap[i].bpm;
-      else break;
-    }
-    return bpm;
-  }
-
-  let pickupDuration = 0;
-  let measureStartTimes = [];   // 1-based: measureStartTimes[1] ... [measuresTotal]
-  let totalScoreTime = 0;
-
-  function buildTiming() {
-    const firstBpm = bpmAtMeasure(1);
-    pickupDuration = pickupBeats * (60 / firstBpm);
-
-    // Precompute start time (in seconds from t=0) for each measure
-    measureStartTimes = new Array(measuresTotal + 2);
-    let t = pickupDuration; // measure 1 starts right after the pickup
-    for (let m = 1; m <= measuresTotal; m++) {
-      measureStartTimes[m] = t;
-      const dur = beatsPerMeasure * (60 / bpmAtMeasure(m));
-      t += dur;
-    }
-    measureStartTimes[measuresTotal + 1] = t; // sentinel end
-    totalScoreTime = t;
-  }
-
-  function timeToPosition(t) {
-    // t is seconds since audio start (including pickup)
-    if (t < pickupDuration) {
-      const firstBpm = bpmAtMeasure(1);
-      const beatDur = 60 / firstBpm;
-      const beatsInto = Math.max(0, t / beatDur);       // 0..1 for 1-beat pickup
-      return {
-        inPickup: true,
-        measure: 1,
-        beat: 1,                       // show as "Pickup"
-        fracWithinMeasure: 0           // keep bar at start
-      };
-    }
-    // Find which measure we're in
-    let m = 1;
-    while (m <= measuresTotal && !(measureStartTimes[m] <= t && t < measureStartTimes[m + 1])) m++;
-    if (m > measuresTotal) m = measuresTotal;
-
-    const start = measureStartTimes[m];
-    const end = measureStartTimes[m + 1] ?? totalScoreTime;
-    const frac = Math.min(0.999, Math.max(0, (t - start) / (end - start)));
-    const beat = Math.min(beatsPerMeasure, Math.floor(frac * beatsPerMeasure) + 1);
-
-    return {
-      inPickup: false,
-      measure: m,
-      beat,
-      fracWithinMeasure: frac
-    };
-  }
-
-  // ---------- ORIGINAL PLAYER CODE ----------
-  let audioContext;
-  let sources = [];
-  let channel = []; // {buffer, gain, slider, muteBtn, soloBtn, muted, solo}
-  let startTime = 0;
-  let duration = 0; // longest buffer duration; not used for timeline anymore
-  let offset = 0;
-  let isPlaying = false;
-
-  // Password gate
-  document.getElementById("pw-submit").addEventListener("click", checkPassword);
-  document.getElementById("password-input").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") checkPassword();
-  });
-
-  function showAuthUI() {
-    document.getElementById("main-controls").style.display = "block";
-    document.getElementById("track-title").style.display = "block";
-    document.getElementById("timer").style.display = "block";
-    document.getElementById("timeline").style.display = "block";
-    document.getElementById("jump-controls").style.display = "block";
-    document.getElementById("player").style.display = "block";
-  }
-
-  function checkPassword() {
-    const raw = document.getElementById("password-input").value || "";
-    const input = raw.trim();
-
-    const err = document.getElementById("pw-error");
-    const ok  = document.getElementById("pw-success");
-    err.style.display = "none";
-    ok.style.display  = "none";
-
-    if (!pwRegex.test(input)) { err.style.display = "block"; return; }
-    if (input !== correctPassword) { err.style.display = "block"; return; }
-
-    ok.style.display = "block";
-    document.getElementById("password-gate").style.display = "none";
-    showAuthUI();
-
-    document.getElementById("play-pause").addEventListener("click", playPause);
-    document.getElementById("stop").addEventListener("click", stopAll);
-
-    // Build timing table now that UI is up
-    buildTiming();
-    // Draw measure ticks for the known total
-    drawTimeline();
-
-    initPlayer();
-  }
-
-  async function initPlayer() {
-    audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    const playerDiv = document.getElementById("player");
-
-    let loadedCount = 0;
-
-    for (const track of tracks) {
-      // Row UI
-      const row = document.createElement("div");
-      row.className = "track";
-      const label = document.createElement("label");
-      label.textContent = track.name;
-
-      const sliderWrap = document.createElement("div");
-      sliderWrap.className = "slider-wrap";
-      const slider = document.createElement("input");
-      slider.type = "range"; slider.min = 0; slider.max = 1; slider.step = 0.01; slider.value = 1;
-      sliderWrap.appendChild(slider);
-
-      const muteBtn = document.createElement("button");
-      muteBtn.className = "btn mute"; muteBtn.textContent = "Mute";
-      const soloBtn = document.createElement("button");
-      soloBtn.className = "btn solo"; soloBtn.textContent = "Solo";
-
-      row.append(label, sliderWrap, muteBtn, soloBtn);
-      playerDiv.appendChild(row);
-
-      // Load defensively
-      try {
-        const resp = await fetch(track.url);
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const arr = await resp.arrayBuffer();
-        const buffer = await audioContext.decodeAudioData(arr);
-
-        const gain = audioContext.createGain();
-        gain.gain.value = parseFloat(slider.value);
-
-        const ch = { buffer, gain, slider, muteBtn, soloBtn, muted:false, solo:false };
-        channel.push(ch);
-        duration = Math.max(duration, buffer.duration);
-
-        // UI wiring
-        slider.addEventListener('input', () => updateMix());
-        muteBtn.addEventListener('click', () => { ch.muted = !ch.muted; muteBtn.classList.toggle('active', ch.muted); updateMix(); });
-        soloBtn.addEventListener('click', () => { ch.solo = !ch.solo; soloBtn.classList.toggle('active', ch.solo); updateMix(); });
-
-        // Status badge
-        const good = document.createElement('span');
-        good.className = 'badge ok';
-        good.textContent = 'Loaded';
-        label.appendChild(good);
-
-        loadedCount++;
-      } catch (e) {
-        console.error(`Failed to load "${track.name}" (${track.url}):`, e);
-        const bad = document.createElement('span');
-        bad.className = 'badge bad';
-        bad.textContent = 'Failed';
-        label.appendChild(bad);
-      }
-    }
-
-    updateMix();
-
-    // Enable buttons if something loaded
-    const playBtn = document.getElementById("play-pause");
-    const stopBtn  = document.getElementById("stop");
-    if (loadedCount > 0) {
-      playBtn.disabled = false; playBtn.textContent = "Play";
-      stopBtn.disabled  = false;
-    } else {
-      playBtn.textContent = "No audio loaded";
-    }
-  }
-
-  function updateMix() {
-    const anySolo = channel.some(ch => ch.solo);
-    channel.forEach(ch => {
-      const sliderVal = parseFloat(ch.slider.value);
-      const soloGate = anySolo ? (ch.solo ? 1 : 0) : 1;
-      const muteGate = ch.muted ? 0 : 1;
-      ch.gain.gain.value = sliderVal * soloGate * muteGate;
+    document.getElementById("pw-submit").addEventListener("click", checkPassword);
+    document.getElementById("password-input").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") checkPassword();
     });
-  }
 
-  async function ensureContext() {
-    if (!audioContext) return;
-    if (audioContext.state !== 'running') {
-      try { await audioContext.resume(); } catch (e) {}
+    function checkPassword() {
+      const input = (document.getElementById("password-input").value || "").trim();
+      const err = document.getElementById("pw-error");
+      const ok  = document.getElementById("pw-success");
+      err.style.display = "none"; ok.style.display = "none";
+      if (!pwRegex.test(input)) { err.style.display = "block"; return; }
+      if (input !== correctPassword) { err.style.display = "block"; return; }
+
+      ok.style.display = "block";
+      document.getElementById("password-gate").style.display = "none";
+      showAppUI();
+      bootstrapSongs(); // build menu and load the first song
     }
-  }
 
-  async function playPause() {
-    if (channel.length === 0) return;
-    await ensureContext();
+    function showAppUI() {
+      document.getElementById("song-picker").style.display = "block";
+      document.getElementById("main-controls").style.display = "block";
+      document.getElementById("track-title").style.display = "block";
+      document.getElementById("timer").style.display = "block";
+      document.getElementById("timeline").style.display = "block";
+      document.getElementById("jump-controls").style.display = "block";
+      document.getElementById("player").style.display = "block";
+      document.getElementById("play-pause").addEventListener("click", playPause);
+      document.getElementById("stop").addEventListener("click", stopAll);
+    }
 
-    const btn = document.getElementById("play-pause");
-    if (!isPlaying) {
-      if (!Number.isFinite(offset) || offset < 0) offset = 0;
-      startTime = audioContext.currentTime - offset;
-      sources = channel.map(ch => {
-        const src = audioContext.createBufferSource();
-        src.buffer = ch.buffer;
-        src.connect(ch.gain).connect(audioContext.destination);
-        src.start(0, offset);
-        return src;
+    // --------------- SONG LIBRARY ---------------
+    // Add more songs by copying this object and changing fields.
+    const SONGS = [
+      {
+        id: "tribute",
+        title: "A Tribute to the Armed Forces",
+        basePath: "assets/A Tribute to the Armed Forces/",
+        tracks: [
+          { label: "Accompaniment", file: "A Tribute to the Armed Services accompaniment Track.wav" },
+          { label: "Soprano",       file: "SopranoA Tribute to the Armed Forces.wav" },
+          { label: "Alto",          file: "AltoA Tribute to the Armed Forces.wav" },
+          { label: "Tenor",         file: "TenorA Tribute to the Armed Forces.wav" },
+          { label: "Bass",          file: "BassA Tribute to the Armed Forces.wav" }
+        ],
+        // Timeline/tempo for this song:
+        beatsPerMeasure: 4,              // set to 3 for 3/4, etc.
+        measuresTotal:   127,
+        pickupBeats:     1,              // quarter-note pickup
+        tempoMap: [
+          { measure: 1, bpm: 96 },       // pickup + measures 1–7
+          { measure: 8, bpm: 108 }       // from measure 8 onward
+        ]
+      },
+      // Example stub for adding another song later:
+      // {
+      //   id: "close-every-door",
+      //   title: "Close Every Door",
+      //   basePath: "assets/Close Every Door/",
+      //   tracks: [
+      //     { label: "Accompaniment", file: "Accompaniment Close Every Door.wav" },
+      //     { label: "Joseph",        file: "Joseph Close Every Door.wav" },
+      //     { label: "S1",            file: "S1 Close Every Door.wav" },
+      //     { label: "S2",            file: "S2 Close Every Door.wav" },
+      //     { label: "Alto",          file: "Alto Close Every Door.wav" },
+      //     { label: "Tenor",         file: "Tenor Close Every Door.wav" },
+      //     { label: "Bass",          file: "Bass Close Every Door.wav" }
+      //   ],
+      //   beatsPerMeasure: 3,
+      //   measuresTotal:   100,          // <- set the actual count
+      //   pickupBeats:     0,            // <- set if there is a pickup
+      //   tempoMap: [
+      //     { measure: 1, bpm: 80 }
+      //   ]
+      // }
+    ];
+
+    // --------------- GLOBAL STATE ---------------
+    let audioContext;
+    let sources = [];
+    let channel = []; // per-track state
+    let isPlaying = false;
+    let offset = 0;
+    let startTime = 0;
+
+    // per-song timing
+    let currentSong = null;
+    let measureStartTimes = []; // 1-based index
+    let totalScoreTime = 0;
+    let pickupDuration = 0;
+
+    // --------------- SONG BOOTSTRAP ---------------
+    function bootstrapSongs() {
+      // populate menu
+      const sel = document.getElementById("song-select");
+      sel.innerHTML = "";
+      SONGS.forEach(s => {
+        const opt = document.createElement("option");
+        opt.value = s.id;
+        opt.textContent = s.title;
+        sel.appendChild(opt);
       });
-      isPlaying = true;
-      btn.textContent = "Pause";
-      animateProgress();
-    } else {
-      const elapsed = audioContext.currentTime - startTime;
-      offset = Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0;
-      sources.forEach(src => { try { src.stop(); } catch(_){} });
-      sources = [];
-      isPlaying = false;
-      btn.textContent = "Play";
+      sel.addEventListener("change", () => {
+        const next = SONGS.find(s => s.id === sel.value);
+        if (next) setSong(next);
+      });
+
+      // load first song by default
+      setSong(SONGS[0]);
     }
-  }
 
-  function stopAll() {
-    if (sources && sources.length) sources.forEach(src => { try { src.stop(); } catch(_){} });
-    sources = [];
-    isPlaying = false;
-    offset = 0;
-    startTime = audioContext ? audioContext.currentTime : 0;
-    document.getElementById("play-pause").textContent = "Play";
-    const bar = document.getElementById("progress-bar");
-    if (bar) bar.style.left = "0px";
-    document.getElementById("timer").textContent = "Measure 1, Beat 1";
-  }
+    function setSong(songCfg) {
+      // stop current audio if playing
+      stopAll(true);
+      currentSong = songCfg;
 
-  function animateProgress() {
-    const bar = document.getElementById("progress-bar");
-    const update = () => {
-      if (!isPlaying) return;
-      const elapsed = audioContext.currentTime - startTime;
-      const pos = timeToPosition(elapsed);
+      // UI: title
+      document.getElementById("track-title").textContent = songCfg.title;
 
-      if (pos.inPickup) {
-        document.getElementById("timer").textContent = "Pickup";
-        bar.style.left = "0px";
-      } else {
-        document.getElementById("timer").textContent = `Measure ${pos.measure}, Beat ${pos.beat}`;
-        const px = ((pos.measure - 1) + pos.fracWithinMeasure) * 34;
-        bar.style.left = `${px}px`;
+      // Rebuild timing + timeline
+      buildTimingFromConfig(songCfg);
+      drawTimeline(songCfg);
+
+      // Clear player rows and load tracks for this song
+      document.getElementById("player").innerHTML = "";
+      channel = [];
+      initPlayerForSong(songCfg);
+    }
+
+    // --------------- TIMING / TEMPO ---------------
+    function bpmAtMeasure(m, tempoMap) {
+      let bpm = tempoMap[0].bpm;
+      for (let i = 0; i < tempoMap.length; i++) {
+        if (tempoMap[i].measure <= m) bpm = tempoMap[i].bpm;
+        else break;
       }
-      requestAnimationFrame(update);
-    };
-    update();
-  }
-
-  function drawTimeline() {
-    const timeline = document.getElementById("timeline");
-    // remove old ticks but keep the progress bar
-    [...timeline.querySelectorAll('.measure-tick')].forEach(el => el.remove());
-
-    for (let i = 1; i <= measuresTotal; i++) {
-      const tick = document.createElement("div");
-      tick.className = "measure-tick";
-      tick.innerHTML = `<span>${i}</span>`;
-      tick.onclick = () => jumpToMeasureNumber(i);
-      timeline.appendChild(tick);
+      return bpm;
     }
 
-    // Ensure the jump input knows the max
-    const jm = document.getElementById("jump-measure");
-    if (jm) jm.max = String(measuresTotal);
-  }
+    function buildTimingFromConfig(cfg) {
+      const firstBpm = bpmAtMeasure(1, cfg.tempoMap);
+      pickupDuration = (cfg.pickupBeats || 0) * (60 / firstBpm);
 
-  function jumpToMeasure() {
-    const m = parseInt(document.getElementById("jump-measure").value, 10);
-    if (!Number.isFinite(m) || m < 1 || m > measuresTotal) return;
-    jumpToMeasureNumber(m);
-  }
+      measureStartTimes = new Array(cfg.measuresTotal + 2);
+      let t = pickupDuration; // measure 1 begins after pickup
+      for (let m = 1; m <= cfg.measuresTotal; m++) {
+        measureStartTimes[m] = t;
+        const dur = cfg.beatsPerMeasure * (60 / bpmAtMeasure(m, cfg.tempoMap));
+        t += dur;
+      }
+      measureStartTimes[cfg.measuresTotal + 1] = t; // sentinel
+      totalScoreTime = t;
 
-  function jumpToMeasureNumber(measureNumber) {
-    const time = measureStartTimes[measureNumber] ?? pickupDuration;
-    offset = time;
+      // update jump max
+      const jm = document.getElementById("jump-measure");
+      if (jm) jm.max = String(cfg.measuresTotal);
+    }
 
-    if (isPlaying && sources && sources.length) {
-      sources.forEach(src => { try { src.stop(); } catch(_){} });
+    function timeToPosition(t, cfg) {
+      if (t < pickupDuration) {
+        return { inPickup: true, measure: 1, beat: 1, fracWithinMeasure: 0 };
+      }
+      let m = 1;
+      while (m <= cfg.measuresTotal && !(measureStartTimes[m] <= t && t < measureStartTimes[m + 1])) m++;
+      if (m > cfg.measuresTotal) m = cfg.measuresTotal;
+
+      const start = measureStartTimes[m];
+      const end = measureStartTimes[m + 1] ?? totalScoreTime;
+      const frac = Math.min(0.999, Math.max(0, (t - start) / (end - start)));
+      const beat = Math.min(cfg.beatsPerMeasure, Math.floor(frac * cfg.beatsPerMeasure) + 1);
+
+      return { inPickup: false, measure: m, beat, fracWithinMeasure: frac };
+    }
+
+    // --------------- AUDIO LOADING / UI ---------------
+    async function initPlayerForSong(cfg) {
+      if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const playerDiv = document.getElementById("player");
+
+      let loadedCount = 0;
+      for (const t of cfg.tracks) {
+        // Row UI
+        const row = document.createElement("div");
+        row.className = "track";
+        const label = document.createElement("label");
+        label.textContent = t.label;
+
+        const sliderWrap = document.createElement("div");
+        sliderWrap.className = "slider-wrap";
+        const slider = document.createElement("input");
+        slider.type = "range"; slider.min = 0; slider.max = 1; slider.step = 0.01; slider.value = 1;
+        sliderWrap.appendChild(slider);
+
+        const muteBtn = document.createElement("button");
+        muteBtn.className = "btn mute"; muteBtn.textContent = "Mute";
+        const soloBtn = document.createElement("button");
+        soloBtn.className = "btn solo"; soloBtn.textContent = "Solo";
+
+        row.append(label, sliderWrap, muteBtn, soloBtn);
+        playerDiv.appendChild(row);
+
+        // Load audio
+        try {
+          const url = encodeURI(cfg.basePath + t.file);
+          const resp = await fetch(url);
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          const arr = await resp.arrayBuffer();
+          const buffer = await audioContext.decodeAudioData(arr);
+
+          const gain = audioContext.createGain();
+          gain.gain.value = parseFloat(slider.value);
+
+          const ch = { buffer, gain, slider, muteBtn, soloBtn, muted:false, solo:false };
+          channel.push(ch);
+
+          // UI wiring
+          slider.addEventListener('input', updateMix);
+          muteBtn.addEventListener('click', () => { ch.muted = !ch.muted; muteBtn.classList.toggle('active', ch.muted); updateMix(); });
+          soloBtn.addEventListener('click', () => { ch.solo = !ch.solo; soloBtn.classList.toggle('active', ch.solo); updateMix(); });
+
+          // Status badge
+          const good = document.createElement('span');
+          good.className = 'badge ok';
+          good.textContent = 'Loaded';
+          label.appendChild(good);
+
+          loadedCount++;
+        } catch (e) {
+          console.error(`Failed to load "${t.label}"`, e);
+          const bad = document.createElement('span');
+          bad.className = 'badge bad';
+          bad.textContent = 'Failed';
+          label.appendChild(bad);
+        }
+      }
+
+      updateMix();
+      const playBtn = document.getElementById("play-pause");
+      const stopBtn  = document.getElementById("stop");
+      if (loadedCount > 0) {
+        playBtn.disabled = false; playBtn.textContent = "Play";
+        stopBtn.disabled  = false;
+      } else {
+        playBtn.textContent = "No audio loaded";
+      }
+    }
+
+    function updateMix() {
+      const anySolo = channel.some(ch => ch.solo);
+      channel.forEach(ch => {
+        const sliderVal = parseFloat(ch.slider.value);
+        const soloGate = anySolo ? (ch.solo ? 1 : 0) : 1;
+        const muteGate = ch.muted ? 0 : 1;
+        ch.gain.gain.value = sliderVal * soloGate * muteGate;
+      });
+    }
+
+    async function ensureContext() {
+      if (!audioContext) return;
+      if (audioContext.state !== 'running') {
+        try { await audioContext.resume(); } catch (e) {}
+      }
+    }
+
+    async function playPause() {
+      if (channel.length === 0) return;
+      await ensureContext();
+
+      const btn = document.getElementById("play-pause");
+      if (!isPlaying) {
+        if (!Number.isFinite(offset) || offset < 0) offset = 0;
+        startTime = audioContext.currentTime - offset;
+        sources = channel.map(ch => {
+          const src = audioContext.createBufferSource();
+          src.buffer = ch.buffer;
+          src.connect(ch.gain).connect(audioContext.destination);
+          src.start(0, offset);
+          return src;
+        });
+        isPlaying = true;
+        btn.textContent = "Pause";
+        animateProgress();
+      } else {
+        const elapsed = audioContext.currentTime - startTime;
+        offset = Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0;
+        sources.forEach(src => { try { src.stop(); } catch(_){} });
+        sources = [];
+        isPlaying = false;
+        btn.textContent = "Play";
+      }
+    }
+
+    function stopAll(silent=false) {
+      if (sources && sources.length) sources.forEach(src => { try { src.stop(); } catch(_){} });
       sources = [];
       isPlaying = false;
+      offset = 0;
+      startTime = audioContext ? audioContext.currentTime : 0;
+      if (!silent) {
+        document.getElementById("play-pause").textContent = "Play";
+        const bar = document.getElementById("progress-bar");
+        if (bar) bar.style.left = "0px";
+        document.getElementById("timer").textContent = "Measure 1, Beat 1";
+      }
     }
-    playPause();
-  }
-</script>
+
+    function animateProgress() {
+      const bar = document.getElementById("progress-bar");
+      const update = () => {
+        if (!isPlaying) return;
+        const elapsed = audioContext.currentTime - startTime;
+        const pos = timeToPosition(elapsed, currentSong);
+
+        if (pos.inPickup) {
+          document.getElementById("timer").textContent = "Pickup";
+          bar.style.left = "0px";
+        } else {
+          document.getElementById("timer").textContent = `Measure ${pos.measure}, Beat ${pos.beat}`;
+          const px = ((pos.measure - 1) + pos.fracWithinMeasure) * 34;
+          bar.style.left = `${px}px`;
+        }
+        requestAnimationFrame(update);
+      };
+      update();
+    }
+
+    // --------------- TIMELINE / JUMP ---------------
+    function drawTimeline(cfg) {
+      const timeline = document.getElementById("timeline");
+      [...timeline.querySelectorAll('.measure-tick')].forEach(el => el.remove());
+      for (let i = 1; i <= cfg.measuresTotal; i++) {
+        const tick = document.createElement("div");
+        tick.className = "measure-tick";
+        tick.innerHTML = `<span>${i}</span>`;
+        tick.onclick = () => jumpToMeasureNumber(i);
+        timeline.appendChild(tick);
+      }
+    }
+
+    function jumpToMeasure() {
+      const m = parseInt(document.getElementById("jump-measure").value, 10);
+      if (!Number.isFinite(m) || m < 1 || m > currentSong.measuresTotal) return;
+      jumpToMeasureNumber(m);
+    }
+
+    function jumpToMeasureNumber(measureNumber) {
+      const time = measureStartTimes[measureNumber] ?? pickupDuration;
+      offset = time;
+      if (isPlaying && sources && sources.length) {
+        sources.forEach(src => { try { src.stop(); } catch(_){} });
+        sources = [];
+        isPlaying = false;
+      }
+      playPause();
+    }
+  </script>
 </body>
 </html>
