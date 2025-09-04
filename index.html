@@ -139,6 +139,25 @@
           { measure: 8, bpm: 108 }       // from measure 8 onward
         ]
       },
+      {
+        id: "spell",
+        title: "I Put a Spell On You",
+        basePath: "assets/I Put a Spell On You/",
+        tracks: [
+          { label: "Accompaniment", file: "I Put a Spell on You Accompaniment.mp3" },
+          { label: "Soprano",       file: "Sop I Put a Spell On You-mp3.mp3" },
+          { label: "Alto",          file: "Alto I Put a Spell On You-mp3.mp3" },
+          { label: "Tenor",         file: "Tenor I Put a Spell On You-mp3.mp3" },
+          { label: "Bass",          file: "Bass I Put a Spell On You-mp3.mp3" }
+        ],
+        // Timeline/tempo for this song:
+        beatsPerMeasure: 4,              // set to 3 for 3/4, etc.
+        measuresTotal:   72,
+        tempoMap: [
+          { measure: 1, bpm: 60 },       // pickup + measures 1–7
+          { measure: 21, bpm: 152 }       // from measure 21 onward
+        ]
+      },
       // Example stub for adding another song later:
       // {
       //   id: "close-every-door",
