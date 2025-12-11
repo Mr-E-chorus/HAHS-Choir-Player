@@ -398,11 +398,23 @@
     let totalScoreTime = 0;
     let pickupDuration = 0;
 
+    // NEW: which song load is the “real” current one
+    let currentSongRequestId = 0;
+
     // --------------- SONG BOOTSTRAP ---------------
     function bootstrapSongs() {
       // populate menu
       const sel = document.getElementById("song-select");
       sel.innerHTML = "";
+      
+      // NEW: placeholder so nothing loads until they choose
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "-- Choose a song --";
+      placeholder.disabled = true;
+      placeholder.selected = true;
+      sel.appendChild(placeholder);
+      
       SONGS.forEach(s => {
         const opt = document.createElement("option");
         opt.value = s.id;
@@ -413,12 +425,13 @@
         const next = SONGS.find(s => s.id === sel.value);
         if (next) setSong(next);
       });
-
-      // load first song by default
-      setSong(SONGS[0]);
     }
 
-    function setSong(songCfg) {
+        function setSong(songCfg) {
+      // NEW: bump request id so any older loads know they’re stale
+      currentSongRequestId++;
+      const myRequestId = currentSongRequestId;
+
       // stop current audio if playing
       stopAll(true);
       currentSong = songCfg;
@@ -433,7 +446,7 @@
       // Clear player rows and load tracks for this song
       document.getElementById("player").innerHTML = "";
       channel = [];
-      initPlayerForSong(songCfg);
+      initPlayerForSong(songCfg, myRequestId);  // pass request id down
     }
 
     // --------------- TIMING / TEMPO ---------------
@@ -482,12 +495,15 @@
     }
 
     // --------------- AUDIO LOADING / UI ---------------
-    async function initPlayerForSong(cfg) {
+    async function initPlayerForSong(cfg, requestId) {
       if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
       const playerDiv = document.getElementById("player");
 
       let loadedCount = 0;
       for (const t of cfg.tracks) {
+        // If the user picked a different song while we were loading, stop immediately
+        if (requestId !== currentSongRequestId) return;
+
         // Row UI
         const row = document.createElement("div");
         row.className = "track";
@@ -509,12 +525,20 @@
         playerDiv.appendChild(row);
 
         // Load audio
+        // Load audio
         try {
           const url = encodeURI(cfg.basePath + t.file);
           const resp = await fetch(url);
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+          // If they changed songs while this file was downloading, bail
+          if (requestId !== currentSongRequestId) return;
+
           const arr = await resp.arrayBuffer();
           const buffer = await audioContext.decodeAudioData(arr);
+
+          // If they changed songs during decode, bail
+          if (requestId !== currentSongRequestId) return;
 
           const gain = audioContext.createGain();
           gain.gain.value = parseFloat(slider.value);
@@ -542,6 +566,9 @@
           label.appendChild(bad);
         }
       }
+
+      // If another song was chosen while we were loading, don't touch UI
+      if (requestId !== currentSongRequestId) return;
 
       updateMix();
       const playBtn = document.getElementById("play-pause");
