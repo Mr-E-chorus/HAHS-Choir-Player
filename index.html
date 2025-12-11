@@ -154,7 +154,7 @@
       ok.style.display = "block";
       document.getElementById("password-gate").style.display = "none";
       showAppUI();
-      bootstrapSongs(); // build menu and load the first song
+      bootstrapSongs(); // build song menu (no song loads until one is chosen)
     }
 
         function showAppUI() {
@@ -769,11 +769,17 @@
     });
     
     async function ensureContext() {
-      if (!audioContext) return;
-      if (audioContext.state !== 'running') {
-        try { await audioContext.resume(); } catch (e) {}
-      }
+  if (!audioContext) {
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (audioContext.state !== "running") {
+    try {
+      await audioContext.resume();
+    } catch (e) {
+      // ignore
     }
+  }
+}
 
         function startPlaybackAtOffset(newOffset) {
       if (!audioContext || channel.length === 0) return;
@@ -1039,16 +1045,6 @@
       playPause();
     }
 
-    function jumpToMeasureNumber(measureNumber) {
-      const time = measureStartTimes[measureNumber] ?? pickupDuration;
-      offset = time;
-      if (isPlaying && sources && sources.length) {
-        sources.forEach(src => { try { src.stop(); } catch(_){} });
-        sources = [];
-        isPlaying = false;
-      }
-      playPause();
-    }
   </script>
 </body>
 </html>
