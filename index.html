@@ -131,6 +131,8 @@
     <p id="access-denied">Access Denied</p>
   </div>
 
+  <button id="change-code" class="btn small">Change Practice Code</button>
+
   <div id="player"></div>
 
   <script>
@@ -171,7 +173,10 @@
       document.getElementById("player").style.display = "block";
       document.getElementById("play-pause").addEventListener("click", playPause);
       document.getElementById("stop").addEventListener("click", stopAll);
-    }
+    
+      const changeCodeBtn = document.getElementById("change-code");
+      if (changeCodeBtn) changeCodeBtn.addEventListener("click", resetPracticeCode);
+}
 
 
     // --------------- SONG LIBRARY ---------------
@@ -474,7 +479,64 @@
     let currentMyPartIndex = null;
 
 
-    // --------------- SONG BOOTSTRAP ---------------
+    
+    // --------------- PRACTICE CODE + OPTIONAL WEBHOOK LOGGING ---------------
+    // If you don't want webhook logging for this site, set ENABLE_WEBHOOK_LOGGING=false
+    const WEBHOOK_URL = '';
+    const CLASS_LABEL = 'Choir Practice';
+    const ENABLE_WEBHOOK_LOGGING = false;
+
+    function getUserId() {
+      const key = 'practice_user_id';
+      let id = localStorage.getItem(key);
+      if (!id) {
+        id =
+          prompt('Enter your practice code (NOT your full name or email):') ||
+          ('anon-' + Math.random().toString(36).slice(2));
+        localStorage.setItem(key, id);
+      }
+      return id.trim();
+    }
+
+    function resetPracticeCode() {
+      localStorage.removeItem('practice_user_id');
+      alert('Practice code cleared. The page will reload so you can enter a new one.');
+      location.reload();
+    }
+
+    const practiceSessionId =
+      (crypto.randomUUID && crypto.randomUUID()) ||
+      (Date.now() + '-' + Math.random().toString(36).slice(2));
+    const practiceUserId = getUserId();
+    const practiceUserAgent = navigator.userAgent;
+    const practiceReferrer = document.referrer || '';
+    const practicePagePath = location.pathname;
+
+    async function logPracticeEvent({ event, seconds = 0, trackId = '', trackTitle = '' }) {
+      if (!ENABLE_WEBHOOK_LOGGING || !WEBHOOK_URL) return;
+      try {
+        await fetch(WEBHOOK_URL, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_id: practiceUserId,
+            class: CLASS_LABEL,
+            event,
+            track_id: trackId,
+            track_title: trackTitle,
+            seconds,
+            session_id: practiceSessionId,
+            user_agent: practiceUserAgent,
+            referrer: practiceReferrer,
+            page_path: practicePagePath
+          })
+        });
+      } catch (e) {
+        console.warn('Practice log failed', e);
+      }
+    }
+// --------------- SONG BOOTSTRAP ---------------
     function bootstrapSongs() {
       // populate menu
       const sel = document.getElementById("song-select");
@@ -547,6 +609,20 @@
       return bpm;
     }
 
+
+    function beatsAtMeasure(m, cfg) {
+      const fallback = Number.isFinite(cfg.beatsPerMeasure) ? cfg.beatsPerMeasure : 4;
+      const map = cfg.meterMap || cfg.beatsPerMeasureMap;
+      if (!Array.isArray(map) || map.length === 0) return fallback;
+
+      let beats = map[0].beats ?? map[0].beatsPerMeasure ?? fallback;
+      for (let i = 0; i < map.length; i++) {
+        if (map[i].measure <= m) beats = map[i].beats ?? map[i].beatsPerMeasure ?? beats;
+        else break;
+      }
+      return beats;
+    }
+
     function buildTimingFromConfig(cfg) {
       const firstBpm = bpmAtMeasure(1, cfg.tempoMap);
       pickupDuration = (cfg.pickupBeats || 0) * (60 / firstBpm);
@@ -555,7 +631,8 @@
       let t = pickupDuration; // measure 1 begins after pickup
       for (let m = 1; m <= cfg.measuresTotal; m++) {
         measureStartTimes[m] = t;
-        const dur = cfg.beatsPerMeasure * (60 / bpmAtMeasure(m, cfg.tempoMap));
+        const beats = beatsAtMeasure(m, cfg);
+        const dur = beats * (60 / bpmAtMeasure(m, cfg.tempoMap));
         t += dur;
       }
       measureStartTimes[cfg.measuresTotal + 1] = t; // sentinel
@@ -577,7 +654,8 @@
       const start = measureStartTimes[m];
       const end = measureStartTimes[m + 1] ?? totalScoreTime;
       const frac = Math.min(0.999, Math.max(0, (t - start) / (end - start)));
-      const beat = Math.min(cfg.beatsPerMeasure, Math.floor(frac * cfg.beatsPerMeasure) + 1);
+      const beatsThisMeasure = beatsAtMeasure(m, cfg);
+      const beat = Math.min(beatsThisMeasure, Math.floor(frac * beatsThisMeasure) + 1);
 
       return { inPickup: false, measure: m, beat, fracWithinMeasure: frac };
     }
@@ -798,6 +876,7 @@
       });
       isPlaying = true;
       document.getElementById("play-pause").textContent = "Pause";
+      logPracticeEvent({ event: "play", seconds: 0, trackId: currentSong ? currentSong.id : "", trackTitle: currentSong ? currentSong.title : document.title });
       animateProgress();
     }
 
@@ -817,6 +896,7 @@
         sources = [];
         isPlaying = false;
         btn.textContent = "Play";
+        logPracticeEvent({ event: "pause", seconds: 0, trackId: currentSong ? currentSong.id : "", trackTitle: currentSong ? currentSong.title : document.title });
         lastPracticeTimestamp = null;
         savePracticeStats();
         updatePracticeDisplay();
@@ -830,6 +910,7 @@
       offset = 0;
       startTime = audioContext ? audioContext.currentTime : 0;
       lastPracticeTimestamp = null;
+      logPracticeEvent({ event: "stop", seconds: 0, trackId: currentSong ? currentSong.id : "", trackTitle: currentSong ? currentSong.title : document.title });
       if (!silent) {
         document.getElementById("play-pause").textContent = "Play";
         const bar = document.getElementById("progress-bar");
@@ -971,7 +1052,8 @@
           document.getElementById("timer").textContent = "Pickup";
           if (bar) bar.style.left = "0px";
         } else {
-          document.getElementById("timer").textContent = `Measure ${pos.measure}, Beat ${pos.beat}`;
+          const beatsThisMeasure = beatsAtMeasure(pos.measure, currentSong);
+          document.getElementById("timer").textContent = `Measure ${pos.measure}, Beat ${pos.beat} (${beatsThisMeasure} beats)`;
           const px = ((pos.measure - 1) + pos.fracWithinMeasure) * 34;
           if (bar) bar.style.left = `${px}px`;
         }
