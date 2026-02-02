@@ -61,6 +61,45 @@
     #warmups h2 { margin: 0 0 8px; font-size: 1rem; }
     #warmups p { margin: 4px 0; font-size: 0.8rem; color:#4b5563; }
     .warmup-group { display:flex; flex-wrap:wrap; gap:6px; margin-bottom: 6px; }
+      /* ===== SIDE-BY-SIDE APP LAYOUT ===== */
+#app-layout {
+  display: none;               /* hidden until password unlock */
+  grid-template-columns: 1.2fr 1fr;
+  gap: 16px;
+  align-items: start;
+
+  /* allow wider than 900px layout */
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 12px;
+  box-sizing: border-box;
+}
+
+/* make panes behave nicely */
+#left-pane, #right-pane {
+  min-width: 0;
+}
+
+/* score viewer fills the left column */
+#score-viewer {
+  display: block !important;
+  margin: 0 !important;
+  max-width: none !important;
+}
+
+#score-frame {
+  height: 78vh !important; /* big enough to be useful */
+}
+
+/* mobile: stack */
+@media (max-width: 900px) {
+  #app-layout {
+    grid-template-columns: 1fr;
+  }
+  #score-frame {
+    height: 55vh !important;
+  }
+}
   </style>
 </head>
 <body>
