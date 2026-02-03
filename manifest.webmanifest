@@ -1,8 +1,6 @@
-{
   "name": "Choir Practice Player",
   "short_name": "Choir Practice",
   "start_url": ".",
   "display": "standalone",
   "background_color": "#111827",
   "theme_color": "#111827",
-}
