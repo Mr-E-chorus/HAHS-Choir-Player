@@ -245,21 +245,22 @@
     // Add more songs by copying this object and changing fields.
     const SONGS = [
       {
-        id: "ghostbusters",
-        title: "Ghostbusters",
-        basePath: "assets/Ghostbusters/",
-        tracks: [
-          { label: "Accompaniment", file: "Ghostbusters accompaniment.mp3" },
-        ],
-        // Timeline/tempo for this song:
-        beatsPerMeasure: 4,              // set to 3 for 3/4, etc.
-        measuresTotal:   127,
-        pickupBeats:     1,              // quarter-note pickup
-        tempoMap: [
-          { measure: 1, bpm: 96 },       // pickup + measures 1–7
-          { measure: 8, bpm: 108 }       // from measure 8 onward
-        ]
+        {
+          id: "rockandroll",
+          title: "It's Still Rock and Roll to Me",
+          basePath: "assets/It's Still Rock and Roll to Me/",
+          scorePdf: "assets/It's Still Rock and Roll to Me/It's Still Rock and Roll To Me.pdf",
+          tracks: [
+            // ...
+          ],
+          beatsPerMeasure: 4,
+          measuresTotal: 120,
+          tempoMap: [{ measure: 1, bpm: 120 }]
+        },
+        
+                ]
       },
+        
       // Example stub for adding another song later:
       // {
       //   id: "close-every-door",
